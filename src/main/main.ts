@@ -9,11 +9,38 @@
  * `./src/main.js` using webpack. This gives us some performance wins.
  */
 import path from 'path';
-import { app, BrowserWindow, shell, ipcMain } from 'electron';
+import { app, BrowserWindow, shell, ipcMain,Tray,nativeImage ,Menu} from 'electron';
 import { autoUpdater } from 'electron-updater';
 import log from 'electron-log';
 import MenuBuilder from './menu';
 import { resolveHtmlPath } from './util';
+import Store from 'electron-store';
+const { powerSaveBlocker } = require('electron');
+import io from "socket.io-client";
+import { scrapeWebsite } from './webscrape';
+// powerSaveBlocker.start('prevent-app-suspension');
+
+// const fetchStatus = async () => {
+//   try {
+//     const token = store.get('token');
+//     const response = await fetch('http://atom.atomnetwork.xyz:3000/api/status', {
+//       method: 'POST',
+//       headers: {
+//         'Authorization': `Bearer ${token}`,
+//         'Content-Type': 'application/json'
+//       },
+//       body: JSON.stringify({ /* your post data here */ })
+//     });
+//     const data = await response.json();
+//     console.log("Status:", data); // Log the status data
+//   } catch (error) {
+//     console.error("Error fetching status:", error);
+//   }
+// };
+
+// // Set up a recurring call every 5 seconds (5000 milliseconds)
+// setInterval(fetchStatus, 5000);
+
 
 class AppUpdater {
   constructor() {
@@ -24,11 +51,19 @@ class AppUpdater {
 }
 
 let mainWindow: BrowserWindow | null = null;
+let tray: Tray | null =null;
+const store = new Store();
 
 ipcMain.on('ipc-example', async (event, arg) => {
   const msgTemplate = (pingPong: string) => `IPC test: ${pingPong}`;
   console.log(msgTemplate(arg));
   event.reply('ipc-example', msgTemplate('pong'));
+});
+
+ipcMain.on('user-login', async (event, arg) => {
+  console.log("User Login", arg);
+  store.set('token', arg[0]);  
+  // event.reply('ipc-example', msgTemplate('pong'));
 });
 
 if (process.env.NODE_ENV === 'production') {
@@ -37,7 +72,7 @@ if (process.env.NODE_ENV === 'production') {
 }
 
 const isDebug =
-  process.env.NODE_ENV === 'development' || process.env.DEBUG_PROD === 'true';
+process.env.NODE_ENV === 'development' || process.env.DEBUG_PROD === 'true';
 
 if (isDebug) {
   require('electron-debug')();
@@ -49,26 +84,26 @@ const installExtensions = async () => {
   const extensions = ['REACT_DEVELOPER_TOOLS'];
 
   return installer
-    .default(
-      extensions.map((name) => installer[name]),
-      forceDownload,
-    )
-    .catch(console.log);
+  .default(
+    extensions.map((name) => installer[name]),
+    forceDownload,
+  )
+  .catch(console.log);
 };
 
 const createWindow = async () => {
   if (isDebug) {
     await installExtensions();
   }
-
+  
   const RESOURCES_PATH = app.isPackaged
-    ? path.join(process.resourcesPath, 'assets')
-    : path.join(__dirname, '../../assets');
-
+  ? path.join(process.resourcesPath, 'assets')
+  : path.join(__dirname, '../../assets');
+  
   const getAssetPath = (...paths: string[]): string => {
     return path.join(RESOURCES_PATH, ...paths);
   };
-
+  
   mainWindow = new BrowserWindow({
     show: false,
     width: 1024,
@@ -76,13 +111,13 @@ const createWindow = async () => {
     icon: getAssetPath('icon.png'),
     webPreferences: {
       preload: app.isPackaged
-        ? path.join(__dirname, 'preload.js')
-        : path.join(__dirname, '../../.erb/dll/preload.js'),
+      ? path.join(__dirname, 'preload.js')
+      : path.join(__dirname, '../../.erb/dll/preload.js'),
     },
   });
-
+  
   mainWindow.loadURL(resolveHtmlPath('index.html'));
-
+  
   mainWindow.on('ready-to-show', () => {
     if (!mainWindow) {
       throw new Error('"mainWindow" is not defined');
@@ -97,7 +132,7 @@ const createWindow = async () => {
   mainWindow.on('closed', () => {
     mainWindow = null;
   });
-
+  
   const menuBuilder = new MenuBuilder(mainWindow);
   menuBuilder.buildMenu();
 
@@ -106,7 +141,14 @@ const createWindow = async () => {
     shell.openExternal(edata.url);
     return { action: 'deny' };
   });
-
+  tray = new Tray(nativeImage.createEmpty());
+  const menu = Menu.buildFromTemplate([
+    {role: "quit"}, // "role": system prepared action menu
+  ]);
+  tray.setToolTip("hello electrol");
+  //top.tray.setTitle("Tray Example"); // macOS only
+  tray.setContextMenu(menu);
+  
   // Remove this if your app does not use auto updates
   // eslint-disable-next-line
   new AppUpdater();
@@ -114,7 +156,7 @@ const createWindow = async () => {
 
 /**
  * Add event listeners...
- */
+*/
 
 app.on('window-all-closed', () => {
   // Respect the OSX convention of having the application in memory even
@@ -123,7 +165,13 @@ app.on('window-all-closed', () => {
     app.quit();
   }
 });
-
+// app.on("before-quit", ev => {
+  //   // BrowserWindow "close" event spawn after quit operation,
+  //   // it requires to clean up listeners for "close" event
+//   mainWindow?.removeAllListeners("close");
+//   // release windows
+//   mainWindow=null;
+// });
 app
   .whenReady()
   .then(() => {
@@ -135,3 +183,33 @@ app
     });
   })
   .catch(console.log);
+  
+  const token=store.get('token')
+
+  if(token){
+
+    const socket = io('http://atom.atomnetwork.xyz:3000', {
+      auth: {
+        token: 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpZCI6IjY2ZTJkNjI2ZGU4MzY2Y2EyNDc5YTBmNyIsInVzZXJuYW1lIjoicnVsZXIiLCJlbWFpbCI6ImJoYXJhdGgxMjM0Z293ZGFAZ21haWwuY29tIiwiaWF0IjoxNzI2OTc5OTg3LCJleHAiOjE3MjcwNjYzODd9.hlgGBAcDZEwQ-vmifwroDNLnZ0JBr_8vZLtECcJyhdA',  // Send the JWT token here
+      }
+    });
+    socket.on('connect', () => {
+      console.log('Connected to WebSocket server');
+    });
+    
+    socket.on('disconnect', () => {
+      console.log('Disconnected from server');
+    });
+    
+    socket.on('newServiceRequest', (data) => {
+      console.log(`New Service Request Received: ${data}`);
+      scrapeWebsite(`https://www.google.com/search?q=${encodeURIComponent(data.service_request_details.search_term)}`)
+    });
+    
+    // Send message
+    socket.emit('message', 'Hello WebSocket server!');
+    
+  }
+  
+  
+  
